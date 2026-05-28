@@ -91,4 +91,142 @@ app.post('/click-enrich', (req, res) => {
 app.get('/clicks', (req, res) => res.json(clickStore));
 app.get('/health', (req, res) => res.json({ ok: true, clicks: clickStore.length }));
 
+
+// ====================== INSTALL ENDPOINT ======================
+const installStore = [];
+
+app.post('/install', async (req, res) => {
+  const install = {
+    ...req.body,
+    install_time: Date.now(),
+    install_ip: req.ip
+  };
+  
+  console.log('INSTALL RECEIVED:', install);
+  
+  let matchedClick = null;
+  let matchType = 'organic';
+  let confidence = 0;
+  
+  // ===== STRATEGY 1: Deterministic match via Install Referrer =====
+  if (install.install_referrer) {
+    const params = new URLSearchParams(install.install_referrer);
+    const clickId = params.get('click_id');
+    if (clickId) {
+      matchedClick = clickStore.find(c => c.click_id === clickId);
+      if (matchedClick) {
+        matchType = 'deterministic';
+        confidence = 1.0;
+        console.log(`✅ Deterministic match: ${clickId}`);
+      } else {
+        console.log(`⚠️  click_id ${clickId} not found in store (server may have restarted)`);
+      }
+    }
+  }
+  
+  // ===== STRATEGY 2: Probabilistic fingerprint match =====
+  if (!matchedClick) {
+    const LOOKBACK_MS = 24 * 60 * 60 * 1000; // 24h
+    const candidates = clickStore.filter(c => 
+      install.install_time - c.timestamp < LOOKBACK_MS
+    );
+    
+    let bestScore = 0;
+    let best = null;
+    for (const click of candidates) {
+      const score = scoreMatch(click, install);
+      if (score > bestScore) {
+        bestScore = score;
+        best = click;
+      }
+    }
+    
+    if (best && bestScore >= 0.6) {
+      matchedClick = best;
+      matchType = 'probabilistic';
+      confidence = bestScore;
+      console.log(`📊 Probabilistic match: ${best.click_id} (score: ${bestScore.toFixed(2)})`);
+    } else {
+      console.log(`❌ No match found (best score: ${bestScore.toFixed(2)}, candidates: ${candidates.length})`);
+    }
+  }
+  
+  // ===== Store the install record =====
+  const installRecord = {
+    ...install,
+    matched_click_id: matchedClick?.click_id || null,
+    match_type: matchType,
+    match_confidence: confidence,
+    campaign: matchedClick?.campaign || 'organic',
+    media_source: matchedClick?.media_source || 'organic'
+  };
+  installStore.push(installRecord);
+  
+  res.json({
+    matched: !!matchedClick,
+    match_type: matchType,
+    confidence,
+    attribution: matchedClick ? {
+      campaign: matchedClick.campaign,
+      media_source: matchedClick.media_source,
+      click_id: matchedClick.click_id
+    } : null
+  });
+});
+
+// Fingerprint scoring function
+function scoreMatch(click, install) {
+  let score = 0;
+  let totalWeight = 0;
+  
+  // IP match (strongest signal) — weight 0.35
+  totalWeight += 0.35;
+  if (click.ip && install.install_ip && click.ip === install.install_ip) {
+    score += 0.35;
+  }
+  
+  // Device model — weight 0.20
+  totalWeight += 0.20;
+  if (click.device_model && install.device_model && 
+      click.device_model.toLowerCase() === install.device_model.toLowerCase()) {
+    score += 0.20;
+  }
+  
+  // Screen resolution — weight 0.15
+  totalWeight += 0.15;
+  if (click.screen_w == install.screen_w && click.screen_h == install.screen_h) {
+    score += 0.15;
+  }
+  
+  // OS version — weight 0.10
+  totalWeight += 0.10;
+  if (click.os_version && install.os_version && 
+      click.os_version === install.os_version) {
+    score += 0.10;
+  }
+  
+  // Timezone — weight 0.10
+  totalWeight += 0.10;
+  if (click.timezone && install.timezone && click.timezone === install.timezone) {
+    score += 0.10;
+  }
+  
+  // Language — weight 0.10
+  totalWeight += 0.10;
+  if (click.accept_language && install.locale) {
+    const clickLang = click.accept_language.split(',')[0]?.split('-')[0]?.toLowerCase();
+    const installLang = install.locale.split('_')[0]?.toLowerCase();
+    if (clickLang === installLang) {
+      score += 0.10;
+    }
+  }
+  
+  return totalWeight > 0 ? score / totalWeight : 0;
+}
+
+// Debug endpoint to see all installs
+app.get('/installs', (req, res) => res.json(installStore));
+
+// ====================== END INSTALL ENDPOINT ======================
+
 app.listen(PORT, () => console.log(`Mock attribution partner on :${PORT}`));

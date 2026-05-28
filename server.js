@@ -8,7 +8,7 @@ app.use(express.urlencoded({ extended: true }));
 app.set('trust proxy', true); // important for getting real IP behind Render's proxy
 
 const PORT = process.env.PORT || 3000;
-const PLAY_STORE_URL = 'https://play.google.com/store/apps/details?id=com.yourapp';
+const PLAY_STORE_URL = 'https://play.google.com/store/apps/details?id=com.pradeep.androidintegration';
 
 // In-memory store for now; swap to Postgres later
 const clickStore = [];
